@@ -1,4 +1,3 @@
-const { syncSchema } = require("../helpers/joiValidation");
 const { google } = require("googleapis");
 
 const handleSync = async (req, res, next) => {
@@ -94,7 +93,7 @@ const handleSync = async (req, res, next) => {
         for (let i = startRow - 1; i < endRow; i++) {
           const rowData = rows.data.values[i];
           const rowNo = i + 1;
-
+          if (!rowData) continue;
           try {
             await fetch(rowUrl, {
               method: "POST",

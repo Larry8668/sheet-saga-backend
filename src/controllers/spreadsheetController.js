@@ -2,12 +2,12 @@ const { google } = require("googleapis");
 const supabase = require("../supabaseClient");
 
 const auth = new google.auth.GoogleAuth({
-    credentials: JSON.parse(process.env.VERCEL_GOOGLE_APPLICATION_CREDENTIALS),
-    scopes: [
-      "https://www.googleapis.com/auth/spreadsheets",
-      "https://www.googleapis.com/auth/drive.metadata.readonly",
-    ],
-  });
+  credentials: JSON.parse(process.env.VERCEL_GOOGLE_APPLICATION_CREDENTIALS),
+  scopes: [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive.metadata.readonly",
+  ],
+});
 
 async function processSpreadsheet(spreadsheetId) {
   // Check if the spreadsheet already exists
@@ -131,15 +131,33 @@ async function processSheet(sheetData) {
     console.log("rows", rows);
 
     if (rows.data.values && rows.data.values.length > 0) {
-      for (let i = 0; i < rows.data.values.length; i++) {
+      // Take the first row as the header
+      const headers = rows.data.values[0];
+      console.log("headers", headers);
+
+      // Update the sheet with title_array (headers)
+      const { error: updateError } = await supabase
+        .from("sheet")
+        .update({ title_array: headers })
+        .eq("id", sheetResult.id);
+
+      if (updateError) {
+        throw updateError;
+      }
+
+      // Process the remaining rows (ignoring the header)
+      for (let i = 1; i < rows.data.values.length; i++) {
         const rowData = {};
         for (let j = 0; j < rows.data.values[i].length; j++) {
-          rowData[`col${j + 1}`] = rows.data.values[i][j];
+          // Use header if available, fallback to col_{index}
+          const colName = headers[j] || `col_${j + 1}`;
+          rowData[colName] = rows.data.values[i][j];
         }
         console.log("rowData", rowData);
+
         await processRow({
           sheetId: sheetResult.id,
-          rowNo: i + 1,
+          rowNo: i,
           data: rowData,
           userEmail: "system@example.com",
           userRole: "system",
@@ -160,6 +178,26 @@ async function processRow(rowData) {
       "Sheet ID, row number, data, user email, user role, and local timestamp are required."
     );
   }
+
+  // Fetch the headers (title_array) for the given sheet
+  const { data: sheetData, error: sheetError } = await supabase
+    .from("sheet")
+    .select("title_array")
+    .eq("id", sheetId)
+    .single();
+
+  if (sheetError) {
+    throw sheetError;
+  }
+
+  const headers = sheetData?.title_array || [];
+
+  // Map incoming row data to headers
+  const rowDataWithHeaders = {};
+  Object.keys(data).forEach((key, index) => {
+    const headerName = headers[index] || `col_${index + 1}`;
+    rowDataWithHeaders[headerName] = data[key];
+  });
 
   // Check if the row already exists
   const { data: existingRow, error: selectError } = await supabase
@@ -184,22 +222,21 @@ async function processRow(rowData) {
     const existingData = existingRow.data;
     const dataKeys = new Set([
       ...Object.keys(existingData),
-      ...Object.keys(data),
+      ...Object.keys(rowDataWithHeaders),
     ]);
 
     let hasChanges = false;
     dataKeys.forEach((key) => {
-      if (existingData[key] !== data[key]) {
+      if (existingData[key] !== rowDataWithHeaders[key]) {
         hasChanges = true;
       }
     });
 
     if (!hasChanges) {
-      // Row data hasn't changed
       operation = "no-change";
       oldRow = existingRow;
       newRow = existingRow;
-    } else if (Object.keys(data).length === 0) {
+    } else if (Object.keys(rowDataWithHeaders).length === 0) {
       // Row data is empty, delete the row
       const { data: deletedRow, error: deleteError } = await supabase
         .from("row")
@@ -218,7 +255,7 @@ async function processRow(rowData) {
       // Update the row
       const { error: updateError } = await supabase
         .from("row")
-        .update({ data })
+        .update({ data: rowDataWithHeaders })
         .eq("id", existingRow.id);
 
       if (updateError) {
@@ -245,7 +282,7 @@ async function processRow(rowData) {
     // Insert new row
     const { error: insertError } = await supabase
       .from("row")
-      .insert([{ sheet_id: sheetId, row_no: rowNo, data }])
+      .insert([{ sheet_id: sheetId, row_no: rowNo, data: rowDataWithHeaders }])
       .single();
 
     if (insertError) {
