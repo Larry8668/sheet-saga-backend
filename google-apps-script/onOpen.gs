@@ -16,6 +16,4 @@ function authorizeAndRun() {
   Logger.log('Spreadsheet Name: ' + spreadsheetName);
   Logger.log('Owner: ' + owner);
   Logger.log('Creation Date: ' + creationDate); // Log creation date
-  
-  setupHiddenSheet();
 }
