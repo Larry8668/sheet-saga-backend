@@ -1,80 +1,140 @@
 const { syncSchema } = require("../helpers/joiValidation");
+const { google } = require("googleapis");
 
-const handleSync = (req, res, next) => {
-  const changes = req.body;
+const handleSync = async (req, res, next) => {
+  const change = req.body;
+  console.log("change ->", change);
 
-  // Check if changes is an array
-  if (!Array.isArray(changes)) {
-    return next({
-      statusCode: 400,
-      message: "Invalid input: changes should be an array.",
+  const spreadsheetUrl = `${req.protocol}://${req.get("host")}/api/spreadsheet`;
+  const sheetUrl = `${req.protocol}://${req.get("host")}/api/sheet`;
+  const rowUrl = `${req.protocol}://${req.get("host")}/api/row`;
+
+  try {
+    const auth = new google.auth.GoogleAuth({
+      credentials: JSON.parse(
+        process.env.VERCEL_GOOGLE_APPLICATION_CREDENTIALS
+      ),
+      scopes: "https://www.googleapis.com/auth/spreadsheets",
     });
-  }
 
-  const validationErrors = [];
-  changes.forEach((change, index) => {
-    const { error } = syncSchema.validate(change);
-    if (error) {
-      validationErrors.push({
-        index,
-        message: error.details[0].message, // Get the first validation error message
-      });
-    }
-  });
+    const client = await auth.getClient();
+    const googleSheets = google.sheets({ version: "v4", auth: client });
 
-  // If there are validation errors, respond with an error
-  if (validationErrors.length > 0) {
-    return next({
-      statusCode: 400,
-      message: `Validation errors: ${validationErrors
-        .map((err) => `At index ${err.index}: ${err.message}`)
-        .join(", ")}`,
-    });
-  }
-
-  // Log the change details
-  changes.forEach((change) => {
     const {
-      range,
-      newValue,
-      oldValue,
       spreadsheetId,
-      spreadsheetName,
-      spreadsheetOwner,
-      creationDate,
+      sheetId,
+      sheetName,
+      startRow,
+      endRow,
       userEmail,
       userRole,
       localTimestamp,
-      timestamp,
-      row,
-      column,
-      sheetId,
-      sheetName,
-      sheetUrl,
-      changeType,
-      action,
     } = change;
 
-    console.log("\n----------------------------------- \n");
-    console.log(`Change detected in spreadsheet ID: ${spreadsheetId}`);
-    console.log(`Spreadsheet Name: ${spreadsheetName}`);
-    console.log(`Spreadsheet Owner: ${spreadsheetOwner}`);
-    console.log(`Spreadsheet Creation Date: ${creationDate}`);
-    console.log(`Sheet Name: ${sheetName}`);
-    console.log(`Sheet Name: ${sheetId}`);
-    console.log(`Cell Range: ${range} (Row: ${row}, Column: ${column})`);
-    console.log(`New Value: ${newValue}`);
-    console.log(`Old Value: ${oldValue}`);
-    console.log(`User Email: ${userEmail}`);
-    console.log(`User Role: ${userRole}`);
-    console.log(`Local Timestamp: ${localTimestamp}`);
-    console.log(`UTC Timestamp: ${timestamp}`);
-    console.log(`Sheet URL: ${sheetUrl}`);
-    console.log(`Change Type: ${changeType}`);
-    console.log(`Action Performed: ${action}`);
-  });
+    let spreadsheetDbId;
+    try {
+      // Fetch spreadsheet data from /api/spreadsheet
+      let response = await fetch(spreadsheetUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spreadsheetId }),
+      });
+      let spreadsheet = await response.json();
+      console.log("spreadsheet ->", spreadsheet);
+      spreadsheetDbId = spreadsheet.id;
+    } catch (error) {
+      console.error(`Error processing spreadsheet ${spreadsheetId}:`, error);
+      return res.status(500).json({ error: `Spreadsheet processing failed.` });
+    }
 
-  res.status(200).send("Data received");
+    try {
+      // Fetch sheet data from /api/sheet
+      const sheets = await googleSheets.spreadsheets.get({ spreadsheetId });
+      const sheet = sheets.data.sheets.find(
+        (s) => s.properties.sheetId === sheetId
+      );
+      if (!sheet) {
+        return res.status(404).json({ error: `Sheet not found.` });
+      }
+
+      let sheetDbId;
+      try {
+        let response = await fetch(sheetUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            spreadsheetId: spreadsheetDbId,
+            sheetName: sheet.properties.title,
+            sheetId: sheet.properties.sheetId,
+            actualSpreadsheetId: spreadsheetId,
+          }),
+        });
+        let existingSheet = await response.json();
+        console.log("existingSheet ->", existingSheet);
+        sheetDbId = existingSheet.id;
+      } catch (error) {
+        console.error(
+          `Error processing sheet ${sheet.properties.sheetId}:`,
+          error
+        );
+        return res.status(500).json({ error: `Sheet processing failed.` });
+      }
+
+      try {
+        // Fetch the entire sheet range
+        const range = `${sheet.properties.title}!A:ZZ`;
+        const rows = await googleSheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: range,
+        });
+
+        console.log("rows ->", rows);
+
+        // Traverse only the rows between startRow and endRow
+        for (let i = startRow - 1; i < endRow; i++) {
+          const rowData = rows.data.values[i];
+          const rowNo = i + 1;
+
+          try {
+            await fetch(rowUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sheetId: sheetDbId,
+                rowNo: rowNo,
+                data: rowData.reduce((acc, value, index) => {
+                  acc[`col${index + 1}`] = value;
+                  return acc;
+                }, {}),
+                userEmail: userEmail || "example@example.com",
+                userRole: userRole || "editor",
+                localTimestamp,
+              }),
+            });
+          } catch (error) {
+            console.error(
+              `Error processing row ${rowNo} in sheet ${sheetDbId}:`,
+              error
+            );
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching rows for sheet ${sheetDbId}:`, error);
+        return res.status(500).json({ error: `Row fetching failed.` });
+      }
+    } catch (error) {
+      console.error(
+        `Error fetching sheets for spreadsheet ${spreadsheetId}:`,
+        error
+      );
+      return res.status(500).json({ error: `Sheet fetching failed.` });
+    }
+
+    res.status(200).send("Data synced successfully");
+  } catch (error) {
+    console.error("Error syncing data:", error);
+    res.status(500).send("Failed to sync data");
+  }
 };
 
 module.exports = { handleSync };

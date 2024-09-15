@@ -2,9 +2,12 @@ const { google } = require("googleapis");
 const supabase = require("../supabaseClient");
 
 const auth = new google.auth.GoogleAuth({
-  keyFile: "credentials.json",
-  scopes: "https://www.googleapis.com/auth/spreadsheets",
-});
+    credentials: JSON.parse(process.env.VERCEL_GOOGLE_APPLICATION_CREDENTIALS),
+    scopes: [
+      "https://www.googleapis.com/auth/spreadsheets",
+      "https://www.googleapis.com/auth/drive.metadata.readonly",
+    ],
+  });
 
 async function processSpreadsheet(spreadsheetId) {
   // Check if the spreadsheet already exists
