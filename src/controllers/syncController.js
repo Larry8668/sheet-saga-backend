@@ -80,43 +80,20 @@ const handleSync = async (req, res, next) => {
       }
 
       try {
-        // Fetch the entire sheet range
-        const range = `${sheet.properties.title}!A:ZZ`;
-        const rows = await googleSheets.spreadsheets.values.get({
-          spreadsheetId,
-          range: range,
+        await fetch(rowUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sheetId: sheetDbId,
+            startRow,
+            endRow,
+            spreadsheetId,
+            sheetName: sheet.properties.title,
+            userEmail: userEmail || "example@example.com",
+            userRole: userRole || "editor",
+            localTimestamp,
+          }),
         });
-
-        console.log("rows ->", rows);
-
-        // Traverse only the rows between startRow and endRow
-        for (let i = startRow - 1; i < endRow; i++) {
-          const rowData = rows.data.values[i];
-          const rowNo = i + 1;
-          if (!rowData) continue;
-          try {
-            await fetch(rowUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                sheetId: sheetDbId,
-                rowNo: rowNo,
-                data: rowData.reduce((acc, value, index) => {
-                  acc[`col${index + 1}`] = value;
-                  return acc;
-                }, {}),
-                userEmail: userEmail || "example@example.com",
-                userRole: userRole || "editor",
-                localTimestamp,
-              }),
-            });
-          } catch (error) {
-            console.error(
-              `Error processing row ${rowNo} in sheet ${sheetDbId}:`,
-              error
-            );
-          }
-        }
       } catch (error) {
         console.error(`Error fetching rows for sheet ${sheetDbId}:`, error);
         return res.status(500).json({ error: `Row fetching failed.` });

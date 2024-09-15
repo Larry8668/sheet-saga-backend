@@ -154,8 +154,7 @@ async function processSheet(sheetData) {
           rowData[colName] = rows.data.values[i][j];
         }
         console.log("rowData", rowData);
-
-        await processRow({
+        await initialRowInsert({
           sheetId: sheetResult.id,
           rowNo: i,
           data: rowData,
@@ -171,6 +170,164 @@ async function processSheet(sheetData) {
 }
 
 async function processRow(rowData) {
+  const {
+    sheetId,
+    startRow,
+    endRow,
+    spreadsheetId,
+    sheetName,
+    userEmail,
+    userRole,
+    localTimestamp,
+  } = rowData;
+
+  if (
+    !sheetId ||
+    !spreadsheetId ||
+    !sheetName ||
+    startRow === undefined ||
+    endRow === undefined
+  ) {
+    throw new Error(
+      "Sheet ID, spreadsheet ID, sheet name, start row, and end row are required."
+    );
+  }
+
+  const auth = new google.auth.GoogleAuth({
+    credentials: JSON.parse(process.env.VERCEL_GOOGLE_APPLICATION_CREDENTIALS),
+    scopes: "https://www.googleapis.com/auth/spreadsheets",
+  });
+
+  const client = await auth.getClient();
+  const googleSheets = google.sheets({ version: "v4", auth: client });
+
+  const range = `${sheetName}!A:ZZ`;
+  const rows = await googleSheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: range,
+  });
+
+  console.log("rows ->", rows);
+
+  let rowsChanged = [];
+  let prevData = [];
+  let newData = [];
+  let operations = [];
+
+  // Fetch the headers (title_array) for the given sheet
+  const { data: sheetData, error: sheetError } = await supabase
+    .from("sheet")
+    .select("title_array")
+    .eq("id", sheetId)
+    .single();
+
+  if (sheetError) {
+    throw sheetError;
+  }
+
+  const headers = sheetData?.title_array || [];
+
+  // Traverse only the rows between startRow and endRow
+  for (let i = startRow - 1; i < endRow; i++) {
+    const rowData = rows.data.values[i];
+    const rowNo = i + 1;
+    if (!rowData) continue;
+
+    // Check if the row already exists
+    const { data: existingRow, error: selectError } = await supabase
+      .from("row")
+      .select("*")
+      .eq("sheet_id", sheetId)
+      .eq("row_no", rowNo)
+      .single();
+
+    if (selectError && selectError.code !== "PGRST116") {
+      throw selectError;
+    }
+
+    const newRowData = {};
+    for (let j = 0; j < rowData.length; j++) {
+      const colName = headers[j] || `col_${j + 1}`;
+      newRowData[colName] = rowData[j];
+    }
+
+    let operation;
+    if (existingRow) {
+      // Check if data has changed
+      const existingData = existingRow.data;
+      const dataKeys = new Set([
+        ...Object.keys(existingData),
+        ...Object.keys(newRowData),
+      ]);
+
+      let hasChanges = false;
+      dataKeys.forEach((key) => {
+        if (existingData[key] !== newRowData[key]) {
+          hasChanges = true;
+        }
+      });
+
+      if (hasChanges) {
+        if (Object.keys(newRowData).length === 0) {
+          // Row data is empty, delete the row
+          const { error: deleteError } = await supabase
+            .from("row")
+            .delete()
+            .eq("id", existingRow.id);
+
+          if (deleteError) throw deleteError;
+
+          operation = "delete";
+        } else {
+          // Update the row
+          const { error: updateError } = await supabase
+            .from("row")
+            .update({ data: newRowData })
+            .eq("id", existingRow.id);
+
+          if (updateError) throw updateError;
+
+          operation = "update";
+        }
+        rowsChanged.push(rowNo);
+        prevData.push(existingRow.data);
+        newData.push(newRowData);
+      } else {
+        operation = "no-change";
+      }
+    } else {
+      // Insert new row
+      const { error: insertError } = await supabase
+        .from("row")
+        .insert([{ sheet_id: sheetId, row_no: rowNo, data: newRowData }]);
+
+      if (insertError) throw insertError;
+
+      operation = "insert";
+      rowsChanged.push(rowNo);
+      prevData.push(null);
+      newData.push(newRowData);
+    }
+
+    operations.push(operation);
+  }
+
+  // Create log payload
+  const logPayload = createLogPayload(
+    sheetId,
+    rowsChanged,
+    prevData,
+    newData,
+    userEmail,
+    userRole,
+    operations,
+    localTimestamp
+  );
+
+  return { rowsChanged, prevData, newData, operations, logPayload };
+}
+
+async function initialRowInsert(rowData) {
   const { sheetId, rowNo, data, userEmail, userRole, localTimestamp } = rowData;
 
   if (sheetId === undefined || rowNo === undefined || data === undefined) {
@@ -358,9 +515,8 @@ const handleSheet = async (req, res, next) => {
 
 const handleRow = async (req, res, next) => {
   try {
-    const { oldRow, newRow, operation, logPayload } = await processRow(
-      req.body
-    );
+    const { rowsChanged, prevData, newData, operations, logPayload } =
+      await processRow(req.body);
 
     // Send log payload
     const logChangeUrl = `${req.protocol}://${req.get("host")}/api/log-change`;
@@ -373,10 +529,11 @@ const handleRow = async (req, res, next) => {
     });
 
     // Return the row data
-    return res.status(operation === "insert" ? 201 : 200).json({
-      prev: oldRow,
-      new: newRow,
-      operation,
+    return res.status(200).json({
+      rowsChanged,
+      prev: prevData,
+      new: newData,
+      operations,
     });
   } catch (error) {
     console.error("Error handling row:", error);
