@@ -131,9 +131,8 @@ async function processSheet(sheetData) {
     console.log("rows", rows);
 
     if (rows.data.values && rows.data.values.length > 0) {
-      // Take the first row as the header
+      // Extract headers from the first row
       const headers = rows.data.values[0];
-      console.log("headers", headers);
 
       // Update the sheet with title_array (headers)
       const { error: updateError } = await supabase
@@ -158,8 +157,8 @@ async function processSheet(sheetData) {
           sheetId: sheetResult.id,
           rowNo: i,
           data: rowData,
-          userEmail: "system@example.com",
-          userRole: "system",
+          userEmail: "example@example.com",
+          userRole: "example",
           localTimestamp: new Date().toISOString(),
         });
       }
