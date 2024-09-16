@@ -1,5 +1,9 @@
 const { google } = require("googleapis");
-const { updateCellInDB, deleteCellInDB } = require("../helpers/dbUpdate");
+const {
+  updateCellInDB,
+  deleteCellInDB,
+  appendRowToDB,
+} = require("../helpers/dbUpdate");
 
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.VERCEL_GOOGLE_APPLICATION_CREDENTIALS),
@@ -65,7 +69,7 @@ const deleteRow = async (req, res) => {
       return res.status(400).json({ error: "Missing required parameters" });
     }
 
-    // Update the database and check if it was successful
+    // Delete from database and check if it was successful
     const dbDeleteResult = await deleteCellInDB(spreadsheetId, sheetId, row);
 
     if (!dbDeleteResult.success) {
@@ -160,8 +164,23 @@ const appendRow = async (req, res) => {
   try {
     const { spreadsheetId, sheetName, values } = req.body;
 
+    // Check if the required parameters are present
     if (!spreadsheetId || !sheetName || !Array.isArray(values)) {
       return res.status(400).json({ error: "Missing required parameters" });
+    }
+
+    // Append to the database
+    const dbAppendResult = await appendRowToDB(
+      spreadsheetId,
+      sheetName,
+      values
+    );
+
+    if (!dbAppendResult.success) {
+      return res.status(400).json({
+        error: "Failed to update database",
+        details: dbAppendResult.message,
+      });
     }
 
     const range = `${sheetName}!A1`; // A1 is just a reference point; it will append to the end
@@ -183,9 +202,9 @@ const appendRow = async (req, res) => {
     });
   } catch (error) {
     console.error("Error appending row:", error);
-    res
+    return res
       .status(500)
-      .json({ error: "Failed to append row", details: error.message });
+      .json({ error: "Internal server error", details: error.message });
   }
 };
 

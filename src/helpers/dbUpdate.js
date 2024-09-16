@@ -181,4 +181,78 @@ const deleteCellInDB = async (spreadsheetId, sheetId, row) => {
   }
 };
 
-module.exports = { updateCellInDB, deleteCellInDB };
+const appendRowToDB = async (spreadsheetId, sheetName, values) => {
+  try {
+    // Step 1: Check if the spreadsheet exists
+    const { data: spreadsheetData, error: spreadsheetError } = await supabase
+      .from("spreadsheet")
+      .select("id")
+      .eq("spreadsheet_id", spreadsheetId)
+      .single();
+
+    if (spreadsheetError || !spreadsheetData) {
+      throw new Error("Spreadsheet not found");
+    }
+
+    const spreadsheetIdInDB = spreadsheetData.id;
+
+    // Step 2: Get the sheet entry
+    const { data: sheetData, error: sheetError } = await supabase
+      .from("sheet")
+      .select("id, title_array")
+      .eq("spreadsheet_id", spreadsheetIdInDB)
+      .eq("sheet_name", sheetName)
+      .single();
+
+    if (sheetError || !sheetData) {
+      throw new Error("Sheet not found");
+    }
+
+    const sheetIdInDB = sheetData.id;
+    const titleArray = sheetData.title_array;
+
+    // Transform values array into an object with titleArray as keys
+    const transformedValues = titleArray.reduce((acc, title, index) => {
+      acc[title] = values[index] || ""; // Use empty string if value is undefined
+      return acc;
+    }, {});
+
+    // Step 3: Retrieve existing rows to determine the next row number
+    const { data: rows, error: rowsError } = await supabase
+      .from("row")
+      .select("row_no")
+      .eq("sheet_id", sheetIdInDB)
+      .order("row_no", { ascending: true });
+
+    if (rowsError) {
+      throw new Error("Error retrieving rows");
+    }
+
+    // Determine the next row number
+    const maxRowNo =
+      rows.length > 0 ? Math.max(...rows.map((r) => r.row_no)) : 0;
+    const nextRowNo = maxRowNo + 1;
+
+    // Insert the new row at the end
+    const { error: insertError } = await supabase.from("row").insert({
+      sheet_id: sheetIdInDB,
+      row_no: nextRowNo,
+      data: transformedValues,
+    });
+
+    if (insertError) {
+      throw new Error("Error inserting row");
+    }
+
+    console.log("Row appended successfully in the database");
+    return {
+      success: true,
+      message: "Row appended successfully in the database",
+    };
+  } catch (error) {
+    console.error("Error appending row to the database:", error);
+    return { success: false, message: error.message };
+  }
+};
+
+module.exports = { updateCellInDB, deleteCellInDB, appendRowToDB };
