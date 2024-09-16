@@ -1,5 +1,5 @@
 const { google } = require("googleapis");
-const { updateCellInDB } = require("../helpers/dbUpdate");
+const { updateCellInDB, deleteCellInDB } = require("../helpers/dbUpdate");
 
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.VERCEL_GOOGLE_APPLICATION_CREDENTIALS),
@@ -25,12 +25,10 @@ const updateEntireRow = async (req, res) => {
     );
 
     if (!dbUpdateResult.success) {
-      return res
-        .status(400)
-        .json({
-          error: "Failed to update database",
-          details: dbUpdateResult.message,
-        });
+      return res.status(400).json({
+        error: "Failed to update database",
+        details: dbUpdateResult.message,
+      });
     }
 
     // Convert row to A1 notation
@@ -65,6 +63,16 @@ const deleteRow = async (req, res) => {
 
     if (!spreadsheetId || !`${sheetId}` || !row) {
       return res.status(400).json({ error: "Missing required parameters" });
+    }
+
+    // Update the database and check if it was successful
+    const dbDeleteResult = await deleteCellInDB(spreadsheetId, sheetId, row);
+
+    if (!dbDeleteResult.success) {
+      return res.status(400).json({
+        error: "Failed to update database",
+        details: dbDeleteResult.message,
+      });
     }
 
     // Create the request body
