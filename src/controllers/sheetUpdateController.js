@@ -1,4 +1,5 @@
 const { google } = require("googleapis");
+const { updateCellInDB } = require("../helpers/dbUpdate");
 
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.VERCEL_GOOGLE_APPLICATION_CREDENTIALS),
@@ -13,6 +14,23 @@ const updateEntireRow = async (req, res) => {
 
     if (!spreadsheetId || !row || !Array.isArray(values)) {
       return res.status(400).json({ error: "Missing required parameters" });
+    }
+
+    // Update the database and check if it was successful
+    const dbUpdateResult = await updateCellInDB(
+      spreadsheetId,
+      sheetName,
+      row,
+      values
+    );
+
+    if (!dbUpdateResult.success) {
+      return res
+        .status(400)
+        .json({
+          error: "Failed to update database",
+          details: dbUpdateResult.message,
+        });
     }
 
     // Convert row to A1 notation
