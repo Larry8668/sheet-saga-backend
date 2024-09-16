@@ -150,7 +150,6 @@ const deleteCellInDB = async (spreadsheetId, sheetId, row) => {
     // Check if the row exists
     const existingRow = rows.find((r) => r.row_no === row);
     if (!existingRow) {
-      // If the row is out of range, just return 200
       console.log("Row is out of range or does not exist");
       return {
         success: true,
@@ -158,25 +157,55 @@ const deleteCellInDB = async (spreadsheetId, sheetId, row) => {
       };
     }
 
-    // Empty the specified row's data
-    const { error: updateError } = await supabase
+    // Step 4: Delete the target row
+    const { error: deleteError } = await supabase
       .from("row")
-      .update({
-        data: titleArray.reduce((acc, title) => ({ ...acc, [title]: "" }), {}),
-      })
+      .delete()
       .eq("id", existingRow.id);
 
-    if (updateError) {
-      throw new Error("Error emptying row data");
+    if (deleteError) {
+      throw new Error("Error deleting row");
     }
 
-    console.log("Row data emptied successfully");
+    // Step 5: Shift rows up and update the last row
+    const rowsToUpdate = rows.filter((r) => r.row_no > row);
+
+    // Update row numbers for rows that should move up
+    for (const rowToUpdate of rowsToUpdate) {
+      const updatedRowNo = rowToUpdate.row_no - 1;
+      const { error: updateRowError } = await supabase
+        .from("row")
+        .update({ row_no: updatedRowNo })
+        .eq("id", rowToUpdate.id);
+
+      if (updateRowError) {
+        throw new Error("Error updating row number");
+      }
+    }
+
+    // // Handle the last row (either delete or empty it)
+    // if (rowsToUpdate.length > 0) {
+    //   const lastRow = rowsToUpdate[rowsToUpdate.length - 1];
+    //   const { error: deleteLastRowError } = await supabase
+    //     .from("row")
+    //     .delete()
+    //     .eq("id", lastRow.id);
+
+    //   if (deleteLastRowError) {
+    //     throw new Error("Error deleting last row");
+    //   }
+    // }
+
+    console.log(
+      "Row deleted, rows shifted up, and last row handled successfully"
+    );
     return {
       success: true,
-      message: "Row data emptied successfully",
+      message:
+        "Row deleted, rows shifted up, and last row handled successfully",
     };
   } catch (error) {
-    console.error("Error emptying row data in the database:", error);
+    console.error("Error processing rows in the database:", error);
     return { success: false, message: error.message };
   }
 };
